@@ -6,6 +6,7 @@ import {
   PointerSensor,
   useSensor,
   useSensors,
+  DragOverlay,
 } from "@dnd-kit/core";
 import {
   arrayMove,
@@ -21,16 +22,12 @@ const STATUS = {
   COMPLETADO: "Completado",
 };
 
-// CAMBIO 1: Función para cargar el estado inicial de los héroes desde localStorage.
-// Es más seguro hacerlo así para evitar errores si el JSON está malformado.
 const getInitialStatus = () => {
   try {
     const savedStatus = localStorage.getItem("heroStatus");
-    // Si hay algo guardado, lo parseamos. Si no, devolvemos un objeto vacío.
     return savedStatus ? JSON.parse(savedStatus) : {};
   } catch (error) {
-    console.error("Error al parsear el estado de los héroes:", error);
-    // Si hay un error (ej. JSON corrupto), devolvemos un objeto vacío para no bloquear la app.
+    console.error("No se pudo cargar el estado de los héroes:", error);
     return {};
   }
 };
@@ -38,49 +35,63 @@ const getInitialStatus = () => {
 
 export default function App() {
   const [heroes, setHeroes] = useState([]);
-
-  // CAMBIO 2: Inicializamos el estado directamente desde la función que lee el localStorage.
   const [statusMap, setStatusMap] = useState(getInitialStatus);
+  const [activeId, setActiveId] = useState(null);
 
   const sensors = useSensors(
     useSensor(PointerSensor),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
-
   useEffect(() => {
     fetch("./assets/mages.json")
       .then((res) => res.json())
       .then((data) => {
         try {
-          // CAMBIO 3: Hacemos más segura la carga del orden.
           const savedOrderJSON = localStorage.getItem("heroOrder");
           if (savedOrderJSON) {
             const savedOrder = JSON.parse(savedOrderJSON);
             const ordered = savedOrder
               .map((name) => data.find((h) => h.name === name))
-              .filter(Boolean); // filter(Boolean) es un truco genial para eliminar nulos o undefined.
-
-            const remaining = data.filter(
-              (h) => !savedOrder.includes(h.name)
-            );
+              .filter(Boolean);
+            const remaining = data.filter((h) => !savedOrder.includes(h.name));
             setHeroes([...ordered, ...remaining]);
           } else {
             setHeroes(data);
           }
         } catch (error) {
-          console.error("Error al cargar el orden de los héroes, usando orden por defecto:", error);
-          setHeroes(data); // Si hay error, cargamos los datos por defecto.
+          console.error("Error al cargar el orden, usando orden por defecto:", error);
+          setHeroes(data);
         }
       });
   }, []);
 
-  // CAMBIO 4: Eliminamos el `useEffect` que cargaba el statusMap, porque ya lo hacemos en useState.
-
-  // Este useEffect para guardar el estado ahora funciona perfectamente.
   useEffect(() => {
     localStorage.setItem("heroStatus", JSON.stringify(statusMap));
   }, [statusMap]);
+
+  function handleDragStart(event) {
+    const { active } = event;
+    setActiveId(active.id);
+  }
+
+  function handleDragEnd(event) {
+    const { active, over } = event;
+
+    if (over && active.id !== over.id) {
+      setHeroes((items) => {
+        const oldIndex = items.findIndex((h) => h.name === active.id);
+        const newIndex = items.findIndex((h) => h.name === over.id);
+        const newOrder = arrayMove(items, oldIndex, newIndex);
+
+        localStorage.setItem("heroOrder", JSON.stringify(newOrder.map((h) => h.name)));
+
+        return newOrder;
+      });
+    }
+
+    setActiveId(null);
+  }
 
   const changeStatus = (heroName) => {
     const current = statusMap[heroName] || STATUS.PENDIENTE;
@@ -93,7 +104,6 @@ export default function App() {
     setStatusMap((prev) => ({ ...prev, [heroName]: next }));
   };
 
-
   const getStatusColor = (status) => {
     switch (status) {
       case STATUS.EN_PROCESO:
@@ -105,31 +115,17 @@ export default function App() {
     }
   };
 
-  const handleDragEnd = (event) => {
-    const { active, over } = event;
-    if (active.id && over && active.id !== over.id) { // Añadida comprobación de que 'over' existe.
-      setHeroes((prevHeroes) => {
-        const oldIndex = prevHeroes.findIndex((h) => h.name === active.id);
-        const newIndex = prevHeroes.findIndex((h) => h.name === over.id);
-
-        if (oldIndex === -1 || newIndex === -1) return prevHeroes; // Seguridad extra
-
-        const newOrder = arrayMove(prevHeroes, oldIndex, newIndex);
-        localStorage.setItem("heroOrder", JSON.stringify(newOrder.map((h) => h.name)));
-        return newOrder;
-      });
-    }
-  };
+  const activeHero = activeId ? heroes.find((h) => h.name === activeId) : null;
 
   return (
-    // CAMBIO 5: Pequeños ajustes para mejorar la experiencia en móviles.
-    <div className="min-h-screen bg-gray-900 text-white p-6 overflow-auto" >
+    <div className="min-h-screen bg-gray-900 text-white p-6 overflow-auto">
       {heroes.length === 0 ? (
         <p className="text-center text-gray-400">Cargando héroes...</p>
       ) : (
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}
+          onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
         >
           <SortableContext
@@ -161,6 +157,33 @@ export default function App() {
               ))}
             </div>
           </SortableContext>
+
+          <DragOverlay>
+            {activeId && activeHero ? (
+              <div className="flex items-center gap-3 bg-gray-700 rounded-lg shadow-xl p-3">
+                <span className="cursor-grabbing text-xl text-gray-400">☰</span>
+                <div className="flex-grow">
+                  <div className="flex items-center justify-between w-full">
+                    <div className="flex items-center gap-3">
+                      <img
+                        src={activeHero.image}
+                        alt={activeHero.name}
+                        className="w-12 h-12 rounded-md object-cover"
+                      />
+                      <h3 className="font-semibold text-lg">{activeHero.name}</h3>
+                    </div>
+                    <button
+                      className={`px-3 py-1 text-sm font-medium rounded-md ${getStatusColor(
+                        statusMap[activeHero.name] || STATUS.PENDIENTE
+                      )}`}
+                    >
+                      {statusMap[activeHero.name] || STATUS.PENDIENTE}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </DragOverlay>
         </DndContext>
       )}
     </div>
